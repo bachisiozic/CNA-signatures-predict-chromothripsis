@@ -1,0 +1,135 @@
+---
+title: "Testing the accuracy of SV and CN signatures for chromothripsis prediction"
+author: "Kylee Maclachlan, maclachk@mskcc.org"
+output: html_document
+##Introduction
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options("scipen"=50, "digits"=4)
+maxiter=2000
+```
+
+The following analysis workflow is a companion to the manuscript “Copy number signatures predict chromothripsis and clinical outcomes in newly diagnosed multiple myeloma” by Maclachlan et al. 
+
+Chromothripsis is a complex chromosomal shattering event associated with random rejoining, and is emerging as strong, independent adverse prognostic factor across multiple malignancies. Reliable detection of chromothripsis requires whole genome sequencing (WGS) and the integration of both structural variants (SVs) and copy number (CN) data. 
+
+CN signature analysis (analytical code in Supplementary Data 1) and SV signature analysis (code in Supplementary Data 2) take whole genome sequencing (WGS) data (or whole exome sequencing for CN signatures) and produce a dataframe detailing the relative proportional contribution from each signature. 
+
+Here we demonstrate how genomic signature analysis can be used to predict for the presence of chromothripsis by estimating the average area-under-the-curve (AUC) from receiver operating characteristic (ROC) curves using 10-fold cross validation. 
+
+In Supplementary Data 4 we demonstrate how CN signatures are more accurate than an alternate CN tool for the prediction of chromothripsis. 
+
+
+## Libraries
+```{r message=FALSE}
+library(plyr)
+library(dplyr)
+library('pROC')
+```
+
+## Load chromothripsis calls and signature results
+```{r}
+WGS_ALL_SIGS <- read.delim("WGS_ALL_SIGS.txt")
+head(WGS_ALL_SIGS)
+```
+
+## Predict chromothripsis from SV and CN signatures together, using using AUC estimation and 10-fold cross validation.
+```{r message=FALSE}
+
+AUCV = NULL
+ROCVSENS = NULL
+ROCVSPENS = NULL
+RUNV =NULL
+
+Len = length(WGS_ALL_SIGS[,1]) 
+SS = 1:Len
+start=1
+end=75 # if the dataset contains 752 samples, then 10x cross-fold validation requires 75 for this value
+num_add<- 75 # and again here
+
+for (i in 1:10){ 
+  
+  kk = SS[-(start:end)]
+  start=start + num_add 
+  end=end + num_add
+  
+  aacov1 = data.frame(chromth=WGS_ALL_SIGS$chromothripsis_code[kk],
+                      factor1 = (WGS_ALL_SIGS$SV_SIG1)[kk],
+                      factor2 = (WGS_ALL_SIGS$SV_SIG2)[kk],
+                      factor3 = (WGS_ALL_SIGS$SV_SIG3)[kk],
+                      factor4 = (WGS_ALL_SIGS$SV_SIG4)[kk],
+                      factor5 = (WGS_ALL_SIGS$SV_SIG5)[kk],
+                      factor6 = (WGS_ALL_SIGS$SV_SIG6)[kk],
+                      factor7 = (WGS_ALL_SIGS$SV_SIG7)[kk],
+                      factor8 = (WGS_ALL_SIGS$SV_SIG8)[kk],
+                      factor9 = (WGS_ALL_SIGS$SV_SIG9)[kk],
+                      factor10 = (WGS_ALL_SIGS$SV_SIG10)[kk],
+                      factor12 = (WGS_ALL_SIGS$CN_SIG1)[kk],
+                      factor13 = (WGS_ALL_SIGS$CN_SIG2)[kk],
+                      factor14 = (WGS_ALL_SIGS$CN_SIG3)[kk],
+                      factor15 = (WGS_ALL_SIGS$CN_SIG4)[kk],
+                      factor16 = (WGS_ALL_SIGS$CN_SIG5)[kk]
+  )
+  
+  aacov = glm(chromth~.,data = aacov1,family='binomial')
+
+  aacov2 = data.frame(chromth=WGS_ALL_SIGS$chromothripsis_code[-kk],
+                      factor1 = (WGS_ALL_SIGS$SV_SIG1)[-kk],
+                      factor2 = (WGS_ALL_SIGS$SV_SIG2)[-kk],
+                      factor3 = (WGS_ALL_SIGS$SV_SIG3)[-kk],
+                      factor4 = (WGS_ALL_SIGS$SV_SIG4)[-kk],
+                      factor5 = (WGS_ALL_SIGS$SV_SIG5)[-kk],
+                      factor6 = (WGS_ALL_SIGS$SV_SIG6)[-kk],
+                      factor7 = (WGS_ALL_SIGS$SV_SIG7)[-kk],
+                      factor8 = (WGS_ALL_SIGS$SV_SIG8)[-kk],
+                      factor9 = (WGS_ALL_SIGS$SV_SIG9)[-kk],
+                      factor10 = (WGS_ALL_SIGS$SV_SIG10)[-kk],
+                      factor12 = (WGS_ALL_SIGS$CN_SIG1)[-kk],
+                      factor13 = (WGS_ALL_SIGS$CN_SIG2)[-kk],
+                      factor14 = (WGS_ALL_SIGS$CN_SIG3)[-kk],
+                      factor15 = (WGS_ALL_SIGS$CN_SIG4)[-kk],
+                      factor16 = (WGS_ALL_SIGS$CN_SIG5)[-kk]
+  )
+  
+  predpr <- predict(aacov,newdata=aacov2,type=c("response"))
+  roccurve <- roc(aacov2$chromth,predpr)
+  aa = auc(roccurve)
+  aa = as.numeric(aa) 
+  
+  AUCV = c(AUCV,aa)
+  ROCVSENS = c(ROCVSENS,roccurve$sensitivities)
+  ROCVSPENS = c(ROCVSPENS,roccurve$specificities)
+  RUNV =c(RUNV,rep(i,length(roccurve$specificities)))
+}
+
+aa<- mean(AUCV)
+aa
+# [1] 0.9601
+```
+
+## Vizualize the results by plotting the mean AUC from ROC analysis
+```{r}
+Y = ROCVSENS
+X1  = 1 - ROCVSPENS 
+
+X11 = 1-roccurve$specificities 
+Y11 = roccurve$sensitivities 
+X11= sort(unique(X1))
+
+par(mar = c(5, 5,3,2) +0.01)
+fit <- smooth.spline(X1, Y, nknots = 10)
+pred <- stats:::predict.smooth.spline(fit, X11)$y  
+
+plot(X1[RUNV==1], Y[RUNV==1],lwd=1.7,type='l',col='blue',main=paste0('Chromothripsis from genomic sigs ', "AUC=",aa),
+     ylab='True Positive',xlab='False Positive', cex.lab = 1.5, cex.axis = 1.3, mgp = c(3, 1,0))
+for (kk in 1:10){
+  points(X1[RUNV==kk], Y[RUNV==kk],type='l',col='blue',lwd=1.7)
+}
+
+lines(X11, pred, lwd = 2, col = 2) 
+abline(a=0,b=1)
+```
+
+
+

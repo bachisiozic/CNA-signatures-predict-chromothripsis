@@ -1,0 +1,206 @@
+---
+title: "Comparing 2 copy number assessment methods for predicting chromothripsis"
+author: "Kylee Maclachlan, maclachk@mskcc.org"
+output: html_document
+
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+options("scipen"=50, "digits"=4)
+maxiter=2000
+```
+
+The following analysis workflow is a companion to the manuscript “Copy number signatures predict chromothripsis and clinical outcomes in newly diagnosed multiple myeloma” by Maclachlan et al. 
+
+Chromothripsis is a complex chromosomal shattering event associated with random rejoining, and is emerging as strong, independent adverse prognostic factor across multiple malignancies. Reliable detection of chromothripsis requires whole genome sequencing (WGS) and the integration of both structural variants (SVs) and copy number (CN) data. 
+
+CN signature analysis (Supplementary Data 1) and SV signature analysis (Supplementary Data 2) take whole genome sequencing (WGS) data (or whole exome sequencing for CN signatures) and produce a dataframe detailing the relative proportional contribution from each signature. This data can then be used to predict for the presence of chromothripsis, estimating the average area-under-the-curve (AUC) from receiver operating characteristic (ROC) curves using 10-fold cross validation (Supplementary Data 3). 
+
+Here we compare the prediction of chromothripsis from CN signatures with the prediction from another CN analysis tool; the genomic scar score (GSS) analysis (Samur et.al. JCO 2020). We obtained the GSS from WGS using the R package scarHRD, which sums 3 CN features (loss-of-heterozygosity, telomeric allelic imbalance, and number of large-scale transitions) to produce a final score. 
+
+To compare the accuracy of chromothripsis-prediction between the 2 methods, we first estimated the average AUC from receiver ROC curves via 10-fold cross validation for each method, then calculated the difference in average AUC between the methods. The standard deviation of the difference in AUCs was estimated by performing a bootstrap resampling; on each new bootstrap sample, we estimated difference in the average AUC between the methods using 10-fold cross-validation. This procedure was repeated 1000 times. 
+
+## Libraries 
+```{r message=FALSE}
+library(plyr)
+library(dplyr)
+library('pROC')
+```
+
+## Load data
+```{r}
+# Output from CN signature  analysis 
+WGS_CN_SIG <- read.delim("MMRF_752WGS_CN_SIG_results.txt")
+dim(WGS_CN_SIG)
+head(WGS_CN_SIG)
+```
+```{r}
+# Output from GSS analysis 
+GSS <- read.delim("MMRF_WGS_genomic_scar_results.txt", stringsAsFactors = F)
+dim(GSS)
+head(GSS)
+```
+```{r}
+datafr_genomes <- left_join(GSS, WGS_CN_SIG, by = "sample")
+```
+
+## Vizualize distribution of GSS scores
+```{r}
+hist(datafr_genomes$HRD.sum, breaks =  40)
+```
+
+## Comparison of chromothripsis prediction methods
+
+Define a function for chromothripsis prediction from CN signatures, using using AUC estimation and 10-fold cross validation.
+```{r, message=FALSE, warning=FALSE}
+my_method_AUC = function(datafr_genomes){
+AUCV = NULL
+ROCVSENS = NULL
+ROCVSPENS = NULL
+RUNV =NULL
+
+Len = length(datafr_genomes[,1]) 
+SS = 1:Len
+start=1
+end= 75 # if the dataset contains 752 samples, then 10x cross-fold validation requires 75 for this value
+num_add<- 75 # and again here
+
+for (i in 1:10){ 
+  
+  kk = SS[-(start:end)]
+  start=start + num_add 
+  end=end + num_add
+
+  aacov1 = data.frame(chromth=datafr_genomes$chromothripsis_code[kk],
+                      CN_SIG1 = (datafr_genomes$CN_SIG1)[kk],
+                      CN_SIG2 = (datafr_genomes$CN_SIG2)[kk],
+                      CN_SIG3 = (datafr_genomes$CN_SIG3)[kk],
+                      CN_SIG4 = (datafr_genomes$CN_SIG4)[kk],
+                      CN_SIG5 = (datafr_genomes$CN_SIG5)[kk]
+  )
+  
+  aacov = glm(chromth~.,data = aacov1,family='binomial')
+
+  aacov2 = data.frame(chromth=datafr_genomes$chromothripsis_code[-kk],
+                      CN_SIG1 = (datafr_genomes$CN_SIG1)[-kk],
+                      CN_SIG2 = (datafr_genomes$CN_SIG2)[-kk],
+                      CN_SIG3 = (datafr_genomes$CN_SIG3)[-kk],
+                      CN_SIG4 = (datafr_genomes$CN_SIG4)[-kk],
+                      CN_SIG5 = (datafr_genomes$CN_SIG5)[-kk]
+
+  )
+
+  predpr <- predict(aacov,newdata=aacov2,type=c("response"))
+  roccurve <- roc(aacov2$chromth,predpr)
+  aa = auc(roccurve)  
+  aa = as.numeric(aa) 
+  
+  AUCV = c(AUCV,aa)
+  ROCVSENS = c(ROCVSENS,roccurve$sensitivities)
+  ROCVSPENS = c(ROCVSPENS,roccurve$specificities)
+  RUNV =c(RUNV,rep(i,length(roccurve$specificities)))
+}
+
+aa<- mean(AUCV)
+aa
+return (aa)
+}
+
+my_method_AUC(datafr_genomes)
+```
+
+Define a function for chromothripsis prediction from the CN features of the genomic scar score, using AUC estimation and 10-fold cross validation.
+```{r, message=FALSE, warning=FALSE}
+other_method_AUC = function(datafr_genomes){
+
+AUCV = NULL
+ROCVSENS = NULL
+ROCVSPENS = NULL
+RUNV =NULL
+
+Len = length(datafr_genomes[,1]) 
+SS = 1:Len
+start=1
+end= 75 # if the dataset contains 752 samples, then 10x cross-fold validation requires 75 for this value
+num_add<- 75 # and again here
+
+for (i in 1:10){ 
+  
+  kk = SS[-(start:end)]
+  start=start + num_add 
+  end=end + num_add
+  
+  aacov1 = data.frame(chromth=datafr_genomes$chromothripsis_code[kk],
+                      CN_feature_1 = (datafr_genomes$HRD.sum)[kk]
+  )
+  
+  aacov = glm(chromth~.,data = aacov1,family='binomial')
+
+  aacov2 = data.frame(chromth=datafr_genomes$chromothripsis_code[-kk],
+                      CN_feature_1 = (datafr_genomes$HRD.sum)[-kk]
+  )
+  
+  predpr <- predict(aacov,newdata=aacov2,type=c("response"))
+  roccurve <- roc(aacov2$chromth,predpr)
+  aa = auc(roccurve)  
+  aa = as.numeric(aa) 
+  
+  AUCV = c(AUCV,aa)
+  ROCVSENS = c(ROCVSENS,roccurve$sensitivities)
+  ROCVSPENS = c(ROCVSPENS,roccurve$specificities)
+  RUNV =c(RUNV,rep(i,length(roccurve$specificities)))
+}
+
+aa<- mean(AUCV)
+aa
+return (aa)
+}
+
+other_method_AUC(datafr_genomes)
+```
+
+## Bootstrap analysis to test the reliability of chromothripsis prediction 
+```{r, message=FALSE, warning=FALSE}
+AUC_my_method = NULL
+AUC_other_method = NULL
+
+L = length(datafr_genomes[,1])
+
+# Outcome metric
+Y <-  datafr_genomes$chromothripsis_code
+
+# Predictors for each approach
+COV_my_method = datafr_genomes
+COV_other_method = datafr_genomes
+
+# Difference between the 2 methods
+deltaObs =  my_method_AUC(COV_my_method) - other_method_AUC(COV_other_method)
+
+deltaV = NULL
+for (j in 1:1000){
+  kkk = sample(1:L, replace = T)
+  Ys = Y[kkk]
+  COV_my_method = datafr_genomes[kkk,]
+  COV_other_method = datafr_genomes[kkk,]
+  
+  deltas=  my_method_AUC(COV_my_method) - other_method_AUC(COV_other_method)
+  deltaV = c(deltaV,deltas)
+}
+```
+
+# Difference in estimation accuracy between the 2 methods
+```{r warnings=FALSE}
+mean(deltaV)
+```
+
+## Vizualize the difference in chromothripsis prediction between the 2 methods from bootstrap
+```{r}
+hist(deltaV)
+```
+
+# Statistical significance of the difference in chromothripsis prediction between the 2 methods
+```{r}
+sds = sd(deltaV)
+pvalue = 2*(1-pnorm(abs(deltaObs)/sds))
+pvalue
+```
